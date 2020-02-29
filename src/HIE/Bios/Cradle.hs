@@ -115,7 +115,7 @@ addCradleDeps deps c =
     addActionDeps :: CradleAction a -> CradleAction a
     addActionDeps ca =
       ca { runCradle = \l fp ->
-            (fmap (\(ComponentOptions os' ds) -> ComponentOptions os' (ds `union` deps)))
+            (fmap (\(ComponentOptions os' ds dir) -> ComponentOptions os' (ds `union` deps) dir))
               <$> runCradle ca l fp }
 
 implicitConfig :: FilePath -> MaybeT IO (CradleConfig a, FilePath)
@@ -200,7 +200,7 @@ defaultCradle cur_dir =
     { cradleRootDir = cur_dir
     , cradleOptsProg = CradleAction
         { actionName = Types.Default
-        , runCradle = \_ _ -> return (CradleSuccess (ComponentOptions [] []))
+        , runCradle = \_ _ -> return (CradleSuccess (ComponentOptions [] [] Nothing))
         }
     }
 
@@ -298,7 +298,7 @@ directCradle wdir args  =
     { cradleRootDir = wdir
     , cradleOptsProg = CradleAction
         { actionName = Types.Direct
-        , runCradle = \_ _ -> return (CradleSuccess (ComponentOptions args []))
+        , runCradle = \_ _ -> return (CradleSuccess (ComponentOptions args [] Nothing))
         }
     }
 
@@ -343,7 +343,7 @@ biosAction wdir bios bios_deps l fp = do
         -- delimited by newlines.
         -- Execute the bios action and add dependencies of the cradle.
         -- Removes all duplicates.
-  return $ makeCradleResult (ex, std, res) deps
+  return $ makeCradleResult (ex, std, res) deps Nothing
 
 ------------------------------------------------------------------------
 -- Cabal Cradle
@@ -370,17 +370,25 @@ findCabalFiles wdir = do
   return $ filter ((== ".cabal") . takeExtension) dirContent
 
 
-processCabalWrapperArgs :: [String] -> Maybe [String]
+-- | Take the output of the wrapper script (as a list of lines), and transform
+-- it into the information we need to invoke GHC. Returns 'Nothing' only if the
+-- argument is empty, otherwise returns @Just (dir, args)@, where @dir@ is the
+-- directory the wrapper script was run in (paths in @args@ will be relative to
+-- this directory), and @args@ are the GHC command-line arguments.
+processCabalWrapperArgs :: [String] -> Maybe (FilePath, [String])
 processCabalWrapperArgs args =
     case args of
+        -- The first thing that the wrapper program prints is its working
+        -- directory. See 'wrappers/cabal' and 'wrappers/cabal.hs'. (This
+        -- is not necessarily the same as the directory we invoke `cabal
+        -- v2-repl` or `stack repl` in.)
         (dir: ghc_args) ->
             let final_args =
                     removeVerbosityOpts
                     $ removeRTS
                     $ removeInteractive
-                    $ map (fixImportDirs dir)
                     $ ghc_args
-            in Just final_args
+            in Just (dir, final_args)
         _ -> Nothing
 
 -- | GHC process information.
@@ -429,7 +437,7 @@ cabalAction work_dir mc l fp = do
                    , unlines output
                    , unlines stde
                    , unlines args])
-      Just final_args -> pure $ makeCradleResult (ex, stde, final_args) deps
+      Just (base_dir, final_args) -> pure $ makeCradleResult (ex, stde, final_args) deps (Just base_dir)
   where
     -- Need to make relative on Windows, due to a Cabal bug with how it
     -- parses file targets with a C: drive in it
@@ -451,26 +459,6 @@ removeRTS []             = []
 
 removeVerbosityOpts :: [String] -> [String]
 removeVerbosityOpts = filter ((&&) <$> (/= "-v0") <*> (/= "-w"))
-
-fixImportDirs :: FilePath -> String -> String
-fixImportDirs base_dir arg =
-  if "-i" `isPrefixOf` arg &&
-     not (isGhcOptionThatBeginsWithI arg)
-    then let dir = drop 2 arg
-         in if not (null dir) && isRelative dir then "-i" ++ base_dir </> dir
-                              else arg
-    else arg
-  where
-    -- If we assume that e.g. "-instantiated-with" means "-i./stanstiated-with",
-    -- GHC gets rather confused!
-    isGhcOptionThatBeginsWithI a =
-      -- We use `isPrefixOf` here in order to also catch
-      -- "-instantiated-with=..." and the like.
-      any (`isPrefixOf` a)
-        [ "-ignore-package"
-        , "-instantiated-with"
-        , "-include-pkg-deps" ]
-
 
 cabalWorkDir :: FilePath -> MaybeT IO FilePath
 cabalWorkDir = findFileUpwards isCabal
@@ -517,8 +505,8 @@ stackAction work_dir mc l _fp = do
                     stde)
                    ++ args)
 
-      Just ghc_args ->
-        makeCradleResult (combineExitCodes [ex1, ex2], stde ++ stdr, ghc_args ++ pkg_ghc_args) deps
+      Just (base_dir, ghc_args) ->
+        makeCradleResult (combineExitCodes [ex1, ex2], stde ++ stdr, ghc_args ++ pkg_ghc_args) deps (Just base_dir)
 
 combineExitCodes :: [ExitCode] -> ExitCode
 combineExitCodes = foldr go ExitSuccess
@@ -688,10 +676,10 @@ readProcessWithOutputFile l ghcProc work_dir fp args =
 readProcessInDirectory :: FilePath -> FilePath -> [String] -> CreateProcess
 readProcessInDirectory wdir p args = (proc p args) { cwd = Just wdir }
 
-makeCradleResult :: (ExitCode, [String], [String]) -> [FilePath] -> CradleLoadResult ComponentOptions
-makeCradleResult (ex, err, gopts) deps =
+makeCradleResult :: (ExitCode, [String], [String]) -> [FilePath] -> Maybe FilePath -> CradleLoadResult ComponentOptions
+makeCradleResult (ex, err, gopts) deps mb_base_dir =
   case ex of
     ExitFailure _ -> CradleFail (CradleError ex err)
     _ ->
-        let compOpts = ComponentOptions gopts deps
+        let compOpts = ComponentOptions gopts deps mb_base_dir
         in CradleSuccess compOpts

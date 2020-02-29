@@ -1,1 +1,4 @@
 packages: .
+
+package hie-bios
+  ghc-options: -Wall -freverse-errors -fhide-source-paths -Wincomplete-record-updates -Wincomplete-uni-patterns

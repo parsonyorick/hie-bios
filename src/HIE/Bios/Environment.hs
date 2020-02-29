@@ -42,6 +42,7 @@ initSession  ComponentOptions {..} = do
         $ setIgnoreInterfacePragmas            -- Ignore any non-essential information in interface files such as unfoldings changing.
         $ writeInterfaceFiles (Just cache_dir) -- Write interface files to the cache
         $ setVerbosity 0                       -- Set verbosity to zero just in case the user specified `-vx` in the options.
+        $ fixImportDirs componentBaseDir       -- Make the import dirs relative to the directory GHC would normally be run in.
         $ setLinkerOptions df'                 -- Set `-fno-code` to avoid generating object files, unless we have to.
         )
     -- Unset the default log action to avoid output going to stdout.
@@ -112,6 +113,19 @@ writeInterfaceFiles (Just hi_dir) df = setHiDir hi_dir (gopt_set df Opt_WriteInt
 setHiDir :: FilePath -> DynFlags -> DynFlags
 setHiDir f d = d { hiDir      = Just f}
 
+-- | Make the import directories relative to the directory that the cradle
+-- expects GHC to be invoked from (since this may not be the directory we are
+-- running in). If the first argument is 'Nothing', the cradle does not have
+-- this information, so the 'DynFlags' are unchanged.
+fixImportDirs :: Maybe FilePath -> DynFlags -> DynFlags
+fixImportDirs Nothing d = d
+fixImportDirs (Just base_dir) d =
+    d { importPaths = map fixDir (importPaths d) }
+  where
+    fixDir dir =
+      if isRelative dir
+        then base_dir </> dir
+        else dir
 
 -- | Interpret and set the specific command line options.
 -- A lot of this code is just copied from ghc/Main.hs

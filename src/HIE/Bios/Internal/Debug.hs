@@ -35,7 +35,7 @@ debugInfo fp cradle = unlines <$> do
     conf <- findConfig canonFp
     crdl <- findCradle' canonFp
     case res of
-      CradleSuccess (ComponentOptions gopts deps) -> do
+      CradleSuccess (ComponentOptions gopts deps _mb_dir) -> do
         mglibdir <- liftIO getSystemLibDir
         return [
             "Root directory:      " ++ rootDir
