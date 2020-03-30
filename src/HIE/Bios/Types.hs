@@ -91,4 +91,9 @@ data ComponentOptions = ComponentOptions {
   -- This is useful, because, sometimes, adding specific files
   -- changes the options that a Cradle may return, thus, needs reload
   -- as soon as these files are created.
+  , componentBaseDir :: Maybe FilePath
+  -- ^ Directory in which the cradle is accustomed to invoking GHC. If
+  -- it is 'Nothing', the cradle does not provide this information.
+  -- (This is needed because any import paths that are passed to GHC
+  -- will be relative to this directory.)
   } deriving (Eq, Ord, Show)
